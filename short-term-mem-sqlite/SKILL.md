@@ -89,7 +89,12 @@ The `@stm_track` decorator (embedded in run_agent.py after post-update recovery)
 
 Session ID: use `self.session_id` from AIAgent. If unavailable, use "cli" as default.
 
-On new session (empty conversation_history): `summaries` returns `{recent, older}`. The decorator injects `recent` entries as-is (tier 1) and pipes `older` entries to `llm_summarize.py` for LLM compression before injecting (tier 2).
+On new session (empty conversation_history): `summaries` returns `{recent, older}`. The decorator:
+1. Injects `recent` entries as-is (tier 1, up to RAW_CAP)
+2. Calls `llm_summarize.py --key <api_key> --base-url <base_url> --model <model>` for tier 2 (older, up to SCAN_CAP)
+   — credentials come from the agent's own `self.api_key`, `self.base_url`, `self.model`, so no env-probing needed
+
+`llm_summarize.py` reads older entries directly from `stm.db` (offset=RAW_CAP, limit=SCAN_CAP) when no stdin is provided. Falls back to config/env when called without `--key/--base-url/--model` args.
 
 Failures are silent — never crash the agent.
 

@@ -91,14 +91,17 @@ def stm_track(fn):
                             + actions + " -> " + result[:120]
                         )
 
-                    # Tier 2: older entries — LLM-summarized then injected
+                    # Tier 2: older entries — LLM-summarized then injected.
+                    # llm_summarize.py reads directly from stm.db (offset=RAW_CAP, limit=SCAN_CAP).
+                    # Credentials passed as CLI args so the script doesn't need its own env probing.
                     if older:
                         try:
-                            older_json = json.dumps(older)
                             llm_res = subprocess.run(
                                 [sys.executable,
-                                 str(Path.home() / ".hermes" / "scripts" / "llm_summarize.py")],
-                                input=older_json,
+                                 str(Path.home() / ".hermes" / "scripts" / "llm_summarize.py"),
+                                 "--key", self.api_key or "",
+                                 "--base-url", self.base_url or "",
+                                 "--model", self.model or ""],
                                 capture_output=True, text=True, timeout=30,
                                 env={**os.environ, "STM_DEBUG": "1"}
                             )
@@ -187,6 +190,122 @@ Add `@stm_track` directly above it:
 ```python
     @stm_track
     def run_conversation(self, user_message: str, system_message: str = None,
+```
+
+## Full `stm_track` Decorator (two-tier version)
+
+```python
+# ── STM TRACKING DECORATOR ──────────────────────────────────────────────────────
+def stm_track(fn):
+    @functools.wraps(fn)
+    def wrapper(self, *args, **kwargs):
+        import sys as _sys, os
+        _sess_id = self.session_id or "cli"
+
+        # ── NEW SESSION: two-tier cross-session context injection ─────────────
+        _hist = kwargs.get("conversation_history")
+        if _hist is None or len(_hist) == 0:
+            try:
+                res = subprocess.run(
+                    [sys.executable,
+                     str(Path.home() / ".hermes" / "scripts" / "stm.py"),
+                     "summaries"],
+                    capture_output=True, text=True, timeout=10,
+                    env={**os.environ, "STM_DEBUG": "1"}
+                )
+                if res.returncode == 0:
+                    data = json.loads(res.stdout)
+                    recent = data.get("recent", [])
+                    older  = data.get("older",  [])
+
+                    ctx_lines = ["[Session Context - recent cross-session activity]"]
+
+                    # Tier 1: recent entries — injected as-is
+                    for s in recent:
+                        _a  = s.get("actions") or "-"
+                        _r  = s.get("result")  or "-"
+                        _st = s.get("status")   or "-"
+                        _sid = s.get("session_id", "?")
+                        ctx_lines.append(
+                            "  " + _sid + " [" + _st + "] "
+                            + _a + " -> " + _r[:120]
+                        )
+
+                    # Tier 2: older entries — LLM-summarized then injected
+                    if older:
+                        try:
+                            llm_res = subprocess.run(
+                                [sys.executable,
+                                 str(Path.home() / ".hermes" / "scripts" / "llm_summarize.py"),
+                                 "--key", self.api_key or "",
+                                 "--base-url", self.base_url or "",
+                                 "--model", self.model or ""],
+                                capture_output=True, text=True, timeout=30,
+                                env={**os.environ, "STM_DEBUG": "1"}
+                            )
+                            if llm_res.returncode == 0 and llm_res.stdout.strip():
+                                ctx_lines.append("")
+                                ctx_lines.append("  [Earlier sessions summary]")
+                                ctx_lines.append("  " + llm_res.stdout.strip())
+                        except Exception:
+                            pass  # LLM summarization optional — fail silent
+
+                    inject_msg = "\n".join(ctx_lines)
+                    _orig_sys = kwargs.get("system_message") or ""
+                    kwargs = dict(kwargs)
+                    kwargs["system_message"] = (
+                        (_orig_sys + "\n\n" + inject_msg) if _orig_sys else inject_msg
+                    )
+                    print(f"[stm] Injected {len(recent)} recent + {len(older)} older "
+                          f"(LLM summary) cross-session entries: "
+                          + "; ".join(s.get("session_id","?") for s in recent[:3]),
+                          file=_sys.stderr, flush=True)
+            except Exception: pass
+
+        # ── APPEND ───────────────────────────────────────────────────────────────
+        _user_msg = args[0] if args else kwargs.get("user_message", "")
+        _entry_id = None
+        try:
+            print(f"[stm] append: {_sess_id} prompt={_user_msg[:80]}",
+                  file=_sys.stderr, flush=True)
+            res = subprocess.run(
+                [sys.executable,
+                 str(Path.home() / ".hermes" / "scripts" / "stm.py"),
+                 "append", _sess_id, _user_msg[:500]],
+                capture_output=True, text=True, timeout=5,
+                env={**os.environ, "STM_DEBUG": "1"}
+            )
+            if res.returncode == 0 and res.stdout.startswith("id:"):
+                _entry_id = int(res.stdout.strip().split(":")[1])
+        except Exception as e:
+            print(f"[stm] append error: {e}", file=_sys.stderr, flush=True)
+
+        result = fn(self, *args, **kwargs)
+
+        # ── UPDATE ───────────────────────────────────────────────────────────────
+        if _entry_id is not None:
+            _tool_names = []
+            for msg in result.get("messages", []):
+                if msg.get("role") == "assistant" and msg.get("tool_calls"):
+                    for tc in msg["tool_calls"]:
+                        _n = tc.get("function",{}).get("name","")
+                        if _n: _tool_names.append(_n)
+            _act = ", ".join(_tool_names) if _tool_names else "no tools"
+            _res = (result.get("final_response") or "")[:300].replace("\n", " ")
+            _st = "success" if result.get("completed") and not result.get("interrupted") \
+                  else ("failed" if result.get("interrupted") else "partial")
+            try:
+                subprocess.run(
+                    [sys.executable,
+                     str(Path.home() / ".hermes" / "scripts" / "stm.py"),
+                     "update", str(_entry_id),
+                     _act[:200], _res[:300], _st],
+                    capture_output=True, text=True, timeout=5,
+                    env={**os.environ, "STM_DEBUG": "1"}
+                )
+            except Exception: pass
+        return result
+    return wrapper
 ```
 
 ## Verification
