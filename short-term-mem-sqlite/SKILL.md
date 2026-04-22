@@ -52,7 +52,9 @@ Override via env: `STM_TOTAL_CAP=600 python3 ~/.hermes/scripts/stm.py ...`
 - `update <id> <actions> <result> <status>` → updates entry by rowid
 - `scan [--raw N] [--scan N] [--session SESSION_ID]` → scan entries
 - `count` → total entry count
-- `summaries [limit]` → last N entries as JSON (for new session context injection)
+- `summaries` → two-tier dict `{recent: [...], older: [...]}` for new session context injection:
+    - `recent`: up to `RAW_CAP` entries (injected as-is)
+    - `older`: up to `SCAN_CAP` entries (LLM-summarized before injection)
 
 ### Examples
 
@@ -71,8 +73,8 @@ stm.py scan --raw 3 --scan 5
 # Scan all entries for a specific session
 stm.py scan --session "20260421_020102_abc123"
 
-# Get recent summaries (for new session injection)
-stm.py summaries 5
+# Get two-tier summaries (recent + older for LLM summarization)
+stm.py summaries
 
 # Entry count
 stm.py count
@@ -87,7 +89,7 @@ The `@stm_track` decorator (embedded in run_agent.py after post-update recovery)
 
 Session ID: use `self.session_id` from AIAgent. If unavailable, use "cli" as default.
 
-On new session (empty conversation_history): `summaries 5` results are injected into system prompt as cross-session context.
+On new session (empty conversation_history): `summaries` returns `{recent, older}`. The decorator injects `recent` entries as-is (tier 1) and pipes `older` entries to `llm_summarize.py` for LLM compression before injecting (tier 2).
 
 Failures are silent — never crash the agent.
 

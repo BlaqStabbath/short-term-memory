@@ -16,7 +16,8 @@ After Hermes updates, `run_agent.py` is overwritten and the `stm_track` decorato
 
 Before patching, verify:
 1. `~/.hermes/scripts/stm.py` exists and is symlinked correctly
-2. `import subprocess` is present in run_agent.py (Step 1 below adds it if missing)
+2. `~/.hermes/scripts/llm_summarize.py` exists and is symlinked correctly
+3. `import subprocess` is present in run_agent.py (Step 1 below adds it if missing)
 
 ## Patch Applied (3 steps)
 
@@ -50,47 +51,77 @@ Insert the following new decorator block after it:
 # ── STM TRACKING DECORATOR ──────────────────────────────────────────────────────
 # Short-Term Memory via SQLite — logs prompts/results to stm.db
 # for cross-session awareness on /new sessions.
+#
+# Two-tier injection on new sessions:
+#   Tier 1 — recent entries (up to RAW_CAP): injected as-is
+#   Tier 2 — older entries (up to SCAN_CAP): LLM-summarized before injection
 # ─────────────────────────────────────────────────────────────────────────────────
 def stm_track(fn):
     @functools.wraps(fn)
     def wrapper(self, *args, **kwargs):
         session_id = getattr(self, "session_id", None) or "cli"
 
-        # ── NEW SESSION: inject cross-session context summaries ─────────────
+        # ── NEW SESSION: two-tier cross-session context injection ─────────────
         _hist = kwargs.get("conversation_history")
         if _hist is None or len(_hist) == 0:
             try:
+                # Get two-tier summaries from stm.py
                 res = subprocess.run(
                     [sys.executable,
                      str(Path.home() / ".hermes" / "scripts" / "stm.py"),
-                     "summaries", "5"],
+                     "summaries"],
                     capture_output=True, text=True, timeout=10,
                     env={**os.environ, "STM_DEBUG": "1"}
                 )
                 if res.returncode == 0:
-                    summaries = json.loads(res.stdout)
-                    if summaries:
-                        ctx_lines = ["[Session Context - recent cross-session activity]"]
-                        for s in summaries:
-                            actions = s.get("actions") or "-"
-                            result  = s.get("result")  or "-"
-                            status  = s.get("status")  or "-"
-                            sid     = s.get("session_id", "?")
-                            ctx_lines.append(
-                                "  " + sid + ": [" + status + "] "
-                                + actions + " -> " + result[:120]
-                            )
-                        inject_msg = chr(10).join(ctx_lines)
-                        _orig_sys = kwargs.get("system_message") or ""
-                        kwargs = dict(kwargs)
-                        kwargs["system_message"] = (
-                            (_orig_sys + chr(10) + chr(10) + inject_msg)
-                            if _orig_sys else inject_msg
+                    data = json.loads(res.stdout)
+                    recent = data.get("recent", [])
+                    older  = data.get("older",  [])
+
+                    ctx_lines = ["[Session Context - recent cross-session activity]"]
+
+                    # Tier 1: recent entries — injected as-is
+                    for s in recent:
+                        actions = s.get("actions") or "-"
+                        result  = s.get("result")  or "-"
+                        status  = s.get("status")  or "-"
+                        sid     = s.get("session_id", "?")
+                        ctx_lines.append(
+                            "  " + sid + ": [" + status + "] "
+                            + actions + " -> " + result[:120]
                         )
-                        import sys as _sys
-                        print(f"[stm] Injected {len(summaries)} cross-session summaries: "
-                              + "; ".join(s.get("session_id","?") for s in summaries),
-                              file=_sys.stderr, flush=True)
+
+                    # Tier 2: older entries — LLM-summarized then injected
+                    if older:
+                        try:
+                            older_json = json.dumps(older)
+                            llm_res = subprocess.run(
+                                [sys.executable,
+                                 str(Path.home() / ".hermes" / "scripts" / "llm_summarize.py")],
+                                input=older_json,
+                                capture_output=True, text=True, timeout=30,
+                                env={**os.environ, "STM_DEBUG": "1"}
+                            )
+                            if llm_res.returncode == 0 and llm_res.stdout.strip():
+                                ctx_lines.append("")
+                                ctx_lines.append("  [Earlier sessions summary]")
+                                ctx_lines.append("  " + llm_res.stdout.strip())
+                        except Exception:
+                            pass  # LLM summarization optional — fail silent
+
+                    inject_msg = chr(10).join(ctx_lines)
+                    _orig_sys = kwargs.get("system_message") or ""
+                    kwargs = dict(kwargs)
+                    kwargs["system_message"] = (
+                        (_orig_sys + chr(10) + chr(10) + inject_msg)
+                        if _orig_sys else inject_msg
+                    )
+                    import sys as _sys
+                    total = len(recent) + len(older)
+                    print(f"[stm] Injected {len(recent)} recent + {len(older)} older "
+                          f"(LLM summary) cross-session entries: "
+                          + "; ".join(s.get("session_id","?") for s in recent[:3]),
+                          file=_sys.stderr, flush=True)
             except Exception:
                 pass
 

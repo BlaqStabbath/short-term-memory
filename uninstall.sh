@@ -11,7 +11,7 @@ echo
 
 # ── 1. Scripts ───────────────────────────────────────────────────────────────
 echo "[1/4] Removing scripts..."
-for script in stm.py short_term_mem_search.py; do
+for script in stm.py short_term_mem_search.py llm_summarize.py; do
     if [[ -L "$HERMES_HOME/scripts/$script" ]]; then
         rm "$HERMES_HOME/scripts/$script"
         echo "  [RM]   $HERMES_HOME/scripts/$script"

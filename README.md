@@ -52,18 +52,24 @@ To remove entirely:
 
 ## How It Works
 
-### Cross-session context on `/new`
+### Cross-session context on `/new` — two tiers
 
 The `@stm_track` decorator on `run_conversation` in `run_agent.py`:
 
 1. **Before** — `stm.py append <session_id> <prompt>` creates an entry (`status=executing`)
 2. **After** — `stm.py update <id> <actions> <result> <status>` finalizes it
-3. **New session** — empty `conversation_history` triggers `stm.py summaries 5`; results injected into `system_message`
+3. **New session** — empty `conversation_history` triggers `stm.py summaries`, which returns two tiers:
+   - **Tier 1** (recent, up to `RAW_CAP`=15): injected as-is
+   - **Tier 2** (older, up to `SCAN_CAP`=40): `llm_summarize.py` compresses them to a paragraph, then injected
 
 ```
 [Session Context - recent cross-session activity]
   20260421_041957_a5e1e2: [success] memory -> Memory saved successfully...
   20260421_041955_93bd96: [success] search_files, skill_view -> short term memory working...
+
+  [Earlier sessions summary]
+  Across several sessions the agent backed up the Obsidian vault, debugged Angular
+  change detection issues, and ran the Hindsight local_embedded plugin setup...
 ```
 
 ### `session_search` integration
@@ -72,10 +78,12 @@ The patched `session_search_tool.py` also queries `stm.db` for each search and a
 
 ### Design
 
+- **Two-tier injection** — recent entries (`RAW_CAP`) injected as-is; older entries (`SCAN_CAP`) LLM-summarized before injection, compressing the context window
 - **WAL mode** — safe concurrent reads/writes across parallel sessions
 - **Fail silent** — `stm.py` errors are caught; never crashes the agent
+- **LLM summarization optional** — if `llm_summarize.py` fails, older entries are simply skipped (tier 2 not injected)
 - **Global FIFO purge** — when `TOTAL_CAP` (500) exceeded, oldest entries purged regardless of session
-- **subprocess isolation** — `stm.py` runs outside the agent's process
+- **subprocess isolation** — both `stm.py` and `llm_summarize.py` run outside the agent's process
 
 ---
 
@@ -142,7 +150,9 @@ short-term-memory/
 ├── LICENSE                                     # MIT
 ├── short-term-mem-sqlite/
 │   ├── SKILL.md
-│   └── scripts/stm.py                          # SQLite CRUD CLI
+│   └── scripts/
+│       ├── stm.py                  # SQLite CRUD CLI
+│       └── llm_summarize.py         # LLM summarization for tier-2 entries
 ├── short-term-mem-sqlite-recovery/
 │   └── SKILL.md                                # run_agent.py patch
 └── short-term-mem-search/

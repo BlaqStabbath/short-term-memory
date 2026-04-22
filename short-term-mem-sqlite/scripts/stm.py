@@ -16,7 +16,9 @@ Commands:
   update <id> <actions> <result> <status>  → updates entry (AFTER action)
   scan [--raw N] [--scan N] [--session SESSION_ID]  → scan entries
   count                                → total entry count
-  summaries [limit]                   → last N entries (for new session injection)
+  summaries [limit]                   → two-tier dict {recent, older} for session injection:
+                                          recent: up to RAW_CAP entries (injected as-is)
+                                          older:  up to SCAN_CAP entries (LLM-summarized then injected)
 
 Status values: executing | success | partial | failed
 """
@@ -168,19 +170,36 @@ def scan_entries(raw_limit: int = None, scan_limit: int = None,
         conn.close()
 
 
-def get_summaries(limit: int = 5) -> list[dict]:
+def get_summaries(limit: int = 5) -> dict:
     """
-    NEW SESSION: return last N entries across all sessions (most recent activity).
-    Used by the session-startup context injection.
+    NEW SESSION: return entries in two tiers for context injection.
+
+    Tier 1 — recent entries (up to RAW_CAP): injected as-is.
+    Tier 2 — older entries (up to SCAN_CAP beyond tier 1): LLM-summarized
+              before injection to compress the context window.
+
+    Returns a dict so the caller (decorator) can handle each tier appropriately.
     """
     conn = get_db()
     try:
-        cur = conn.execute(
+        # Tier 1: most recent entries, as-is
+        recent_rows = conn.execute(
             "SELECT id, session_id, prompt, actions, result, status, timestamp "
             "FROM entries ORDER BY timestamp DESC LIMIT ?",
-            (limit,)
-        )
-        return [_row_to_dict(r) for r in cur.fetchall()]
+            (RAW_CAP,)
+        ).fetchall()
+
+        # Tier 2: next SCAN_CAP entries after tier 1 — for LLM summarization
+        older_rows = conn.execute(
+            "SELECT id, session_id, prompt, actions, result, status, timestamp "
+            "FROM entries ORDER BY timestamp DESC LIMIT ? OFFSET ?",
+            (SCAN_CAP, RAW_CAP)
+        ).fetchall()
+
+        return {
+            "recent": [_row_to_dict(r) for r in recent_rows],
+            "older":  [_row_to_dict(r) for r in older_rows],
+        }
     finally:
         conn.close()
 
@@ -258,6 +277,7 @@ if __name__ == "__main__":
     elif cmd == "summaries":
         limit = int(sys.argv[2]) if len(sys.argv) > 2 else 5
         summaries = get_summaries(limit)
+        # Always include both tiers for the decorator
         print(json.dumps(summaries, indent=2))
 
     else:

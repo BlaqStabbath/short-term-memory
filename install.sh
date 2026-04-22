@@ -22,6 +22,11 @@ link_skill() {
     local dest="$HERMES_HOME/skills/$name"
     if [[ -L "$dest" ]]; then
         echo "  [SKIP] $name (already symlinked)"
+    elif [[ -d "$dest" ]]; then
+        # Existing copy — replace with symlink
+        rm -rf "$dest"
+        ln -sf "$src" "$dest"
+        echo "  [REPLACE] $name (copy -> symlink)"
     else
         ln -sf "$src" "$dest"
         echo "  [LINK] $name -> $src"
@@ -43,6 +48,11 @@ link_script() {
     local dest="$HERMES_HOME/scripts/$name"
     if [[ -L "$dest" ]]; then
         echo "  [SKIP] $name (already symlinked)"
+    elif [[ -f "$dest" ]]; then
+        # Existing file — replace with symlink
+        rm "$dest"
+        ln -sf "$src" "$dest"
+        echo "  [REPLACE] $name (file -> symlink)"
     else
         ln -sf "$src" "$dest"
         echo "  [LINK] $name -> $src"
@@ -51,6 +61,7 @@ link_script() {
 }
 
 link_script "$SKILLS_SRC/short-term-mem-sqlite/scripts/stm.py"
+link_script "$SKILLS_SRC/short-term-mem-sqlite/scripts/llm_summarize.py"
 link_script "$SKILLS_SRC/short-term-mem-search/scripts/short_term_mem_search.py"
 
 # ── 3. Verify ────────────────────────────────────────────────────────────────
