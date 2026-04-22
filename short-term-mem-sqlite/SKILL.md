@@ -1,9 +1,12 @@
 ---
 name: short-term-mem-sqlite
 description: SQLite-backed short-term memory for Hermes — stores recent session events (prompts, actions, results) across parallel CLI sessions. Uses a single stm.db with WAL mode, configurable via STM_DB_PATH env var.
-trigger: >-
-  short-term memory, stm, sqlite short term memory,
-  short term mem sqlite, stm skill
+triggers:
+  - short-term memory
+  - stm
+  - sqlite short term memory
+  - short term mem sqlite
+  - stm skill
 ---
 
 # short-term-mem-sqlite — Session Context via SQLite

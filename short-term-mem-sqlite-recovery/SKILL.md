@@ -1,7 +1,7 @@
 ---
 name: short-term-mem-sqlite-recovery
 description: Patch run_agent.py after Hermes update — injects the stm_track decorator for SQLite-backed short-term memory. Handles cross-session context injection on new sessions and logs all prompts/results to stm.db.
-trigger:
+triggers:
   - after hermes update
   - patch stm
   - short-term mem patch
