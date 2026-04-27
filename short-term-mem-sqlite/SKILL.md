@@ -52,9 +52,9 @@ Override via env: `STM_TOTAL_CAP=600 python3 ~/.hermes/scripts/stm.py ...`
 - `update <id> <actions> <result> <status>` → updates entry by rowid
 - `scan [--raw N] [--scan N] [--session SESSION_ID]` → scan entries
 - `count` → total entry count
-summaries [limit]                   → two-tier dict {recent, older} for session injection:
-                                          recent: up to RAW_CAP entries (injected as-is, no summarization)
-                                          older:  up to SCAN_CAP entries (topic-indexed — TF-IDF bigrams, no LLM)
+summaries                       → two-tier dict {recent, older} for session injection:
+                                      recent: up to RAW_CAP entries (injected as-is)
+                                      older:  up to SCAN_CAP entries (topic-indexed via build_topic_index.py)
 
 ### Examples
 
@@ -132,4 +132,4 @@ Failures are silent — never crash the agent.
 - `id` (rowid) is used for update — stable within the append→update window
 - Prompts stored raw — no shlex or special quoting required
 - `stm.py` is called via `subprocess.run()` from within `run_agent.py`, keeping DB operations isolated from the agent's process
-- `build_topic_index.py` is the drop-in replacement for `llm_summarize.py` — same CLI interface (stdin/DB read, JSON in, text out)
+- `build_topic_index.py` reads older entries directly from `stm.db` (offset=RAW_CAP, limit=SCAN_CAP) when no stdin is provided. It replaces the deprecated `llm_summarize.py` — same CLI interface (stdin/DB read, JSON in, text out) but uses TF-IDF instead of an LLM.

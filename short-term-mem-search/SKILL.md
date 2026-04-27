@@ -6,9 +6,19 @@ triggers:
   - stm not in session_search
   - session_search_tool patched
   - session search missing stm
+  - hook stm into session search
 related_skills:
   - short-term-mem-sqlite
 ---
+
+## ⚠ Status: NOT YET APPLIED TO LIVE SYSTEM
+
+The `session_search_tool.py` patch documented here has **not been deployed** to the live system. The core STM tracking and new-session context injection work fine without this skill. This skill exists as a reference implementation for when the patch is ready to be applied.
+
+To apply manually:
+```bash
+/hermes /skill short-term-mem-search
+```
 
 # short-term-mem-search — Hook STM into session_search
 

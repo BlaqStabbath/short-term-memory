@@ -13,12 +13,14 @@ triggers:
 
 # short-term-mem-sqlite Recovery — Implementation (Apr 27 2026)
 
-## Status: DEPLOYED
+## Status: DEPLOYED (cron-first)
 
-- `@stm_track` decorator applied to `run_agent.py` — ✓ live since Apr 27 2026
-- `patch_stm_decorator.py` — ✓ in `~/.hermes/scripts/`
-- `hermes-post-update-recovery` cron job — ✓ created (daily at 05:00, job_id: e0dde69b683a)
-- Scripts: `stm.py` (symlink), `build_topic_index.py` (symlink) in `~/.hermes/scripts/` — ✓
+The daily `hermes-post-update-recovery` cron (job ID `e0dde69b683a`, 05:00 UTC) automatically re-applies the `@stm_track` decorator after any Hermes update. In most cases you don't need to do anything.
+
+This skill is for:
+1. **Understanding** — how the decorator patch works
+2. **Manual verification** — `patch_stm_decorator.py --verify`
+3. **Emergency manual patch** — `patch_stm_decorator.py --apply`
 
 ---
 

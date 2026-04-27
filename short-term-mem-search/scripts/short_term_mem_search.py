@@ -1,17 +1,10 @@
 #!/usr/bin/env python3
-"""
-short_term_mem_search.py — Query STM entries for session_search integration.
-Searches stm.db by prompt/actions/result text and returns matches as JSON.
-Called by the patched session_search_tool.py.
-"""
 import json
 import sqlite3
-import sys
 from pathlib import Path
 from typing import Any
 
 DB_PATH = Path.home() / ".hermes" / "sessions" / "stm.db"
-
 
 def search_short_term_mem_files(query: str, limit: int = 3) -> list[dict[str, Any]]:
     if not query or not query.strip():
@@ -22,6 +15,7 @@ def search_short_term_mem_files(query: str, limit: int = 3) -> list[dict[str, An
         conn = sqlite3.connect(str(DB_PATH))
         conn.execute("PRAGMA journal_mode=WAL")
         rows = conn.execute(
+
             "SELECT id, session_id, prompt, actions, result, status, timestamp "
             "FROM entries ORDER BY id DESC LIMIT 100"
         ).fetchall()
@@ -47,8 +41,8 @@ def search_short_term_mem_files(query: str, limit: int = 3) -> list[dict[str, An
                 return results
     return results
 
-
 if __name__ == "__main__":
+    import sys
     query = sys.argv[1] if len(sys.argv) > 1 else ""
     limit = int(sys.argv[2]) if len(sys.argv) > 2 else 3
     matches = search_short_term_mem_files(query, limit)
