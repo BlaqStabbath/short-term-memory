@@ -19,8 +19,9 @@ CONFIG_PATH = HERMES_HOME / "config.yaml"
 ENV_PATH    = HERMES_HOME / ".env"
 
 # ── Cap constants (must match stm.py) ─────────────────────────────────────────
-RAW_CAP  = int(os.environ.get("STM_RAW_CAP",  "15"))   # recent entries injected as-is
-SCAN_CAP = int(os.environ.get("STM_SCAN_CAP", "40"))   # older entries → LLM summarization
+RAW_CAP  = int(os.environ.get("STM_RAW_CAP",  "5"))   # recent entries injected as-is
+SCAN_CAP = int(os.environ.get("STM_SCAN_CAP", "45"))   # older entries → LLM summarization
+TOKEN_CAP = 400                                        # max tokens in LLM summary output
 DB_PATH  = os.environ.get("STM_DB_PATH", str(HERMES_HOME / "sessions" / "stm.db"))
 
 # ── API key env vars ──────────────────────────────────────────────────────────
@@ -206,7 +207,7 @@ def _call_llm(api_key: str, base_url: str, model: str, messages: list[dict]) -> 
         data = {
             "model": model,
             "messages": messages,
-            "max_tokens": 200,
+            "max_tokens": TOKEN_CAP,
             "temperature": 0.3,
         }
         req = urllib.request.Request(
@@ -227,7 +228,7 @@ def _call_llm(api_key: str, base_url: str, model: str, messages: list[dict]) -> 
         data = {
             "model": model,
             "messages": messages,
-            "max_tokens": 200,
+            "max_tokens": TOKEN_CAP,
             "temperature": 0.3,
         }
         req = urllib.request.Request(
@@ -247,7 +248,7 @@ def _call_llm(api_key: str, base_url: str, model: str, messages: list[dict]) -> 
 def summarize_entries(entries: list[dict], override: dict = None) -> str:
     """
     Build a compact summary paragraph of older entries via LLM.
-    Uses RAW_CAP (15) as offset and SCAN_CAP (40) as limit from stm.db.
+    Uses RAW_CAP (5) as offset and SCAN_CAP (45) as limit from stm.db.
     """
     if not entries:
         return ""

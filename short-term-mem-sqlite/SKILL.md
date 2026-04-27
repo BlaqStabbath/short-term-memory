@@ -38,8 +38,8 @@ CREATE INDEX idx_timestamp  ON entries(timestamp);
 | Constant | Default | Description |
 |----------|---------|-------------|
 | `TOTAL_CAP` | 500 | Max entries before global purge |
-| `RAW_CAP` | 15 | Entries fully injected into new session context |
-| `SCAN_CAP` | 40 | Entries scanned for LLM summarization (after raw) |
+| `RAW_CAP` | 5 | Entries fully injected into new session context (no summarization) |
+| `SCAN_CAP` | 45 | Entries scanned for LLM summarization (after raw — the older 40 are summarized) |
 | `PURGE_CAP` | 50 | Entries purged when TOTAL_CAP exceeded |
 
 Override via env: `STM_TOTAL_CAP=600 python3 ~/.hermes/scripts/stm.py ...`
@@ -52,9 +52,9 @@ Override via env: `STM_TOTAL_CAP=600 python3 ~/.hermes/scripts/stm.py ...`
 - `update <id> <actions> <result> <status>` → updates entry by rowid
 - `scan [--raw N] [--scan N] [--session SESSION_ID]` → scan entries
 - `count` → total entry count
-- `summaries` → two-tier dict `{recent: [...], older: [...]}` for new session context injection:
-    - `recent`: up to `RAW_CAP` entries (injected as-is)
-    - `older`: up to `SCAN_CAP` entries (LLM-summarized before injection)
+summaries [limit]                   → two-tier dict {recent, older} for session injection:
+                                          recent: up to RAW_CAP entries (injected as-is, no summarization)
+                                          older:  up to SCAN_CAP entries (LLM-summarized — the 40 beyond the 5 raw entries)
 
 ### Examples
 
@@ -90,8 +90,8 @@ The `@stm_track` decorator (embedded in run_agent.py after post-update recovery)
 Session ID: use `self.session_id` from AIAgent. If unavailable, use "cli" as default.
 
 On new session (empty conversation_history): `summaries` returns `{recent, older}`. The decorator:
-1. Injects `recent` entries as-is (tier 1, up to RAW_CAP)
-2. Calls `llm_summarize.py --key <api_key> --base-url <base_url> --model <model>` for tier 2 (older, up to SCAN_CAP)
+1. Injects `recent` entries as-is (tier 1, up to RAW_CAP=5 entries — no summarization)
+2. Calls `llm_summarize.py --key <api_key> --base-url <base_url> --model <model>` for tier 2 (older, up to SCAN_CAP=45 entries beyond the 5 raw — the 40 older entries are LLM-summarized, target ~100 words)
    — credentials come from the agent's own `self.api_key`, `self.base_url`, `self.model`, so no env-probing needed
 
 `llm_summarize.py` reads older entries directly from `stm.db` (offset=RAW_CAP, limit=SCAN_CAP) when no stdin is provided. Falls back to config/env when called without `--key/--base-url/--model` args.

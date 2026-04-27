@@ -7,8 +7,8 @@ Usage: stm.py <command> [args]
 
 Constants (can override via env):
   TOTAL_CAP  = 500   — max entries before purge
-  RAW_CAP    = 15   — entries fully injected into new session context
-  SCAN_CAP   = 40   — entries scanned for summarization (after raw)
+  RAW_CAP    = 5    — entries fully injected as-is (no summarization)
+  SCAN_CAP   = 45   — older entries scanned for LLM summarization (after raw)
   PURGE_CAP  = 50   — entries purged when TOTAL_CAP exceeded
 
 Commands:
@@ -35,8 +35,8 @@ _db_name = os.environ.get("STM_DB_PATH", "stm.db")
 DB_PATH = Path(_db_name) if Path(_db_name).is_absolute() \
           else Path.home() / ".hermes" / "sessions" / _db_name
 TOTAL_CAP  = int(os.environ.get("STM_TOTAL_CAP",  "500"))
-RAW_CAP    = int(os.environ.get("STM_RAW_CAP",    "15"))
-SCAN_CAP   = int(os.environ.get("STM_SCAN_CAP",   "40"))
+RAW_CAP    = int(os.environ.get("STM_RAW_CAP",    "5"))
+SCAN_CAP   = int(os.environ.get("STM_SCAN_CAP",   "45"))
 PURGE_CAP  = int(os.environ.get("STM_PURGE_CAP",  "50"))
 DEBUG      = os.environ.get("STM_DEBUG", "") == "1"
 
