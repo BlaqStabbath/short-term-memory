@@ -1,3 +1,7 @@
+# DEPRECATED — replaced by build_topic_index.py (Apr 27 2026)
+# kept for rollback reference only. No longer called by the stm_track decorator.
+# build_topic_index.py provides deterministic TF-IDF extraction with no LLM needed.
+# ───────────────────────────────────────────────────────────────────────────────
 #!/usr/bin/env python3
 """
 llm_summarize.py — Condense older STM entries via LLM for context compression.

@@ -16,7 +16,7 @@ After Hermes updates, `run_agent.py` is overwritten and the `stm_track` decorato
 
 Before patching, verify:
 1. `~/.hermes/scripts/stm.py` exists and is symlinked correctly
-2. `~/.hermes/scripts/llm_summarize.py` exists and is symlinked correctly
+2. `~/.hermes/scripts/build_topic_index.py` exists and is symlinked correctly
 3. `import subprocess` is present in run_agent.py (Step 1 below adds it if missing)
 
 ## Patch Applied (3 steps)
@@ -54,7 +54,7 @@ Insert the following new decorator block after it:
 #
 # Two-tier injection on new sessions:
 #   Tier 1 — recent entries (up to RAW_CAP): injected as-is
-#   Tier 2 — older entries (up to SCAN_CAP): LLM-summarized before injection
+#   Tier 2 — older entries (up to SCAN_CAP): topic-indexed (TF-IDF bigrams, NO LLM)
 # ─────────────────────────────────────────────────────────────────────────────────
 def stm_track(fn):
     @functools.wraps(fn)
@@ -91,26 +91,22 @@ def stm_track(fn):
                             + actions + " -> " + result[:120]
                         )
 
-                    # Tier 2: older entries — LLM-summarized then injected.
-                    # llm_summarize.py reads directly from stm.db (offset=RAW_CAP, limit=SCAN_CAP).
-                    # Credentials passed as CLI args so the script doesn't need its own env probing.
+                    # Tier 2: older entries — topic-indexed via build_topic_index.py.
+                    # No LLM, no API key needed. Reads from stm.db directly.
                     if older:
                         try:
-                            llm_res = subprocess.run(
+                            idx_res = subprocess.run(
                                 [sys.executable,
-                                 str(Path.home() / ".hermes" / "scripts" / "llm_summarize.py"),
-                                 "--key", self.api_key or "",
-                                 "--base-url", self.base_url or "",
-                                 "--model", self.model or ""],
-                                capture_output=True, text=True, timeout=30,
+                                 str(Path.home() / ".hermes" / "scripts" / "build_topic_index.py")],
+                                capture_output=True, text=True, timeout=10,
                                 env={**os.environ, "STM_DEBUG": "1"}
                             )
-                            if llm_res.returncode == 0 and llm_res.stdout.strip():
+                            if idx_res.returncode == 0 and idx_res.stdout.strip():
                                 ctx_lines.append("")
-                                ctx_lines.append("  [Earlier sessions summary]")
-                                ctx_lines.append("  " + llm_res.stdout.strip())
+                                ctx_lines.append("  [Earlier sessions — topic index]")
+                                ctx_lines.append("  " + idx_res.stdout.strip())
                         except Exception:
-                            pass  # LLM summarization optional — fail silent
+                            pass  # topic indexing optional — fail silent
 
                     inject_msg = chr(10).join(ctx_lines)
                     _orig_sys = kwargs.get("system_message") or ""
@@ -122,7 +118,7 @@ def stm_track(fn):
                     import sys as _sys
                     total = len(recent) + len(older)
                     print(f"[stm] Injected {len(recent)} recent + {len(older)} older "
-                          f"(LLM summary) cross-session entries: "
+                          f"(topic-indexed) cross-session entries: "
                           + "; ".join(s.get("session_id","?") for s in recent[:3]),
                           file=_sys.stderr, flush=True)
             except Exception:
@@ -231,24 +227,21 @@ def stm_track(fn):
                             + _a + " -> " + _r[:120]
                         )
 
-                    # Tier 2: older entries — LLM-summarized then injected
+                    # Tier 2: older entries — topic-indexed (TF-IDF, no LLM)
                     if older:
                         try:
-                            llm_res = subprocess.run(
+                            idx_res = subprocess.run(
                                 [sys.executable,
-                                 str(Path.home() / ".hermes" / "scripts" / "llm_summarize.py"),
-                                 "--key", self.api_key or "",
-                                 "--base-url", self.base_url or "",
-                                 "--model", self.model or ""],
-                                capture_output=True, text=True, timeout=30,
+                                 str(Path.home() / ".hermes" / "scripts" / "build_topic_index.py")],
+                                capture_output=True, text=True, timeout=10,
                                 env={**os.environ, "STM_DEBUG": "1"}
                             )
-                            if llm_res.returncode == 0 and llm_res.stdout.strip():
+                            if idx_res.returncode == 0 and idx_res.stdout.strip():
                                 ctx_lines.append("")
-                                ctx_lines.append("  [Earlier sessions summary]")
-                                ctx_lines.append("  " + llm_res.stdout.strip())
+                                ctx_lines.append("  [Earlier sessions — topic index]")
+                                ctx_lines.append("  " + idx_res.stdout.strip())
                         except Exception:
-                            pass  # LLM summarization optional — fail silent
+                            pass  # topic indexing optional — fail silent
 
                     inject_msg = "\n".join(ctx_lines)
                     _orig_sys = kwargs.get("system_message") or ""
@@ -257,7 +250,7 @@ def stm_track(fn):
                         (_orig_sys + "\n\n" + inject_msg) if _orig_sys else inject_msg
                     )
                     print(f"[stm] Injected {len(recent)} recent + {len(older)} older "
-                          f"(LLM summary) cross-session entries: "
+                          f"(topic-indexed) cross-session entries: "
                           + "; ".join(s.get("session_id","?") for s in recent[:3]),
                           file=_sys.stderr, flush=True)
             except Exception: pass
