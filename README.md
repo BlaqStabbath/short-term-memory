@@ -60,7 +60,7 @@ The `@stm_track` decorator on `run_conversation` in `run_agent.py`:
 2. **After** — `stm.py update <id> <actions> <result> <status>` finalizes it
 3. **New session** — empty `conversation_history` triggers `stm.py summaries`, which returns two tiers:
    - **Tier 1** (recent, up to `RAW_CAP`=15): injected as-is
-   - **Tier 2** (older, up to `SCAN_CAP`=40): `llm_summarize.py` compresses them to a paragraph, then injected
+   - **Tier 2** (older, up to `SCAN_CAP`=30): `llm_summarize.py` compresses them to a paragraph, then injected
 
 ```
 [Session Context - recent cross-session activity]
@@ -117,7 +117,7 @@ stm.py summaries 5
 STM_DB_PATH=/path/to/custom.db   # default: ~/.hermes/sessions/stm.db
 STM_TOTAL_CAP=600                # default: 500
 STM_RAW_CAP=20                   # default: 15
-STM_SCAN_CAP=50                  # default: 40
+STM_SCAN_CAP=30                  # default: 30
 STM_PURGE_CAP=50                 # default: 50
 STM_DEBUG=1                      # verbose stderr
 ```

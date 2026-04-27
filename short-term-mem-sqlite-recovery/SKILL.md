@@ -1,321 +1,124 @@
 ---
 name: short-term-mem-sqlite-recovery
-description: Patch run_agent.py after Hermes update — injects the stm_track decorator for SQLite-backed short-term memory. Handles cross-session context injection on new sessions and logs all prompts/results to stm.db.
+description: >
+  Auto-loading approach for SQLite short-term memory — verifies correctness
+  of decorator patch AND handles post-update recovery via idempotent patch script.
 triggers:
   - after hermes update
   - patch stm
   - short-term mem patch
   - short-term-mem-sqlite recovery
+  - stm auto-load
 ---
 
-# short-term-mem-sqlite Recovery — Post-Update Decorator Patch
+# short-term-mem-sqlite Recovery — Implementation (Apr 27 2026)
 
-After Hermes updates, `run_agent.py` is overwritten and the `stm_track` decorator must be re-injected.
+## Status: DEPLOYED
 
-## Pre-Update Checklist
+- `@stm_track` decorator applied to `run_agent.py` — ✓ live since Apr 27 2026
+- `patch_stm_decorator.py` — ✓ in `~/.hermes/scripts/`
+- `hermes-post-update-recovery` cron job — ✓ created (daily at 05:00, job_id: e0dde69b683a)
+- Scripts: `stm.py` (symlink), `build_topic_index.py` (symlink) in `~/.hermes/scripts/` — ✓
 
-Before patching, verify:
-1. `~/.hermes/scripts/stm.py` exists and is symlinked correctly
-2. `~/.hermes/scripts/build_topic_index.py` exists and is symlinked correctly
-3. `import subprocess` is present in run_agent.py (Step 1 below adds it if missing)
+---
 
-## Patch Applied (3 steps)
+## Architecture
 
-### Step 1 — Ensure `import subprocess` is present
-
-Check that `import subprocess` exists near the top of run_agent.py (around line 38).
-
-If missing, find:
-```python
-import functools
-import threading
+```
+run_agent.py::run_conversation()
+    │
+    └── @stm_track decorator
+            │
+            ├── NEW SESSION? → stm.py summaries + build_topic_index.py → inject system_message
+            ├── BEFORE CALL  → stm.py append (prompt, status=executing)
+            └── AFTER CALL   → stm.py update (actions, result, status)
 ```
 
-Replace with:
-```python
-import functools
-import subprocess
-import threading
+Two layers:
+1. **STM Tracking**: append/update via `stm.py` subprocess calls
+2. **Context Injection**: TF-IDF topic index via `build_topic_index.py` on new sessions only
+
+---
+
+## Why Not a Plugin?
+
+The `MemoryProvider` ABC has no hook that can:
+- Detect a new session before the first API call (needs `conversation_history`)
+- Inject into the system message for new sessions only
+
+Plugin hooks (`system_prompt_block()`, `prefetch()`, `sync_turn()`) are called per-turn and don't have access to `conversation_history` as a signal for "new session". The decorator approach intercepts `run_conversation()` directly — this is the only place that has both.
+
+---
+
+## Auto-Recovery: `patch_stm_decorator.py`
+
+**Location:** `~/.hermes/scripts/patch_stm_decorator.py`
+
+**Modes:**
+```bash
+python3 ~/.hermes/scripts/patch_stm_decorator.py           # dry run
+python3 ~/.hermes/scripts/patch_stm_decorator.py --apply   # patch if missing
+python3 ~/.hermes/scripts/patch_stm_decorator.py --verify  # exit 0 if OK
 ```
 
-### Step 2 — Add the `stm_track` decorator (after imports)
+**Is idempotent** — safe to re-run after Hermes updates. The cron job runs it daily.
 
-Find the line:
-```python
-import functools
-```
+The script:
+1. Checks if `def stm_track(` and `@stm_track` are in `run_agent.py`
+2. Adds `import functools` + `import subprocess` if missing
+3. Inserts the decorator definition after the env-loading block
+4. Applies `@stm_track` to `run_conversation`
 
-Insert the following new decorator block after it:
+---
 
-```python
-# ── STM TRACKING DECORATOR ──────────────────────────────────────────────────────
-# Short-Term Memory via SQLite — logs prompts/results to stm.db
-# for cross-session awareness on /new sessions.
-#
-# Two-tier injection on new sessions:
-#   Tier 1 — recent entries (up to RAW_CAP): injected as-is
-#   Tier 2 — older entries (up to SCAN_CAP): topic-indexed (TF-IDF bigrams, NO LLM)
-# ─────────────────────────────────────────────────────────────────────────────────
-def stm_track(fn):
-    @functools.wraps(fn)
-    def wrapper(self, *args, **kwargs):
-        session_id = getattr(self, "session_id", None) or "cli"
+## Cron Job: `hermes-post-update-recovery`
 
-        # ── NEW SESSION: two-tier cross-session context injection ─────────────
-        _hist = kwargs.get("conversation_history")
-        if _hist is None or len(_hist) == 0:
-            try:
-                # Get two-tier summaries from stm.py
-                res = subprocess.run(
-                    [sys.executable,
-                     str(Path.home() / ".hermes" / "scripts" / "stm.py"),
-                     "summaries"],
-                    capture_output=True, text=True, timeout=10,
-                    env={**os.environ, "STM_DEBUG": "1"}
-                )
-                if res.returncode == 0:
-                    data = json.loads(res.stdout)
-                    recent = data.get("recent", [])
-                    older  = data.get("older",  [])
+- **Job ID:** `e0dde69b683a`
+- **Schedule:** Daily at 05:00
+- **Action:** Runs `patch_stm_decorator.py --apply` then verifies scripts
 
-                    ctx_lines = ["[Session Context - recent cross-session activity]"]
-
-                    # Tier 1: recent entries — injected as-is
-                    for s in recent:
-                        actions = s.get("actions") or "-"
-                        result  = s.get("result")  or "-"
-                        status  = s.get("status")  or "-"
-                        sid     = s.get("session_id", "?")
-                        ctx_lines.append(
-                            "  " + sid + ": [" + status + "] "
-                            + actions + " -> " + result[:120]
-                        )
-
-                    # Tier 2: older entries — topic-indexed via build_topic_index.py.
-                    # No LLM, no API key needed. Reads from stm.db directly.
-                    if older:
-                        try:
-                            idx_res = subprocess.run(
-                                [sys.executable,
-                                 str(Path.home() / ".hermes" / "scripts" / "build_topic_index.py")],
-                                capture_output=True, text=True, timeout=10,
-                                env={**os.environ, "STM_DEBUG": "1"}
-                            )
-                            if idx_res.returncode == 0 and idx_res.stdout.strip():
-                                ctx_lines.append("")
-                                ctx_lines.append("  [Earlier sessions — topic index]")
-                                ctx_lines.append("  " + idx_res.stdout.strip())
-                        except Exception:
-                            pass  # topic indexing optional — fail silent
-
-                    inject_msg = chr(10).join(ctx_lines)
-                    _orig_sys = kwargs.get("system_message") or ""
-                    kwargs = dict(kwargs)
-                    kwargs["system_message"] = (
-                        (_orig_sys + chr(10) + chr(10) + inject_msg)
-                        if _orig_sys else inject_msg
-                    )
-                    import sys as _sys
-                    total = len(recent) + len(older)
-                    print(f"[stm] Injected {len(recent)} recent + {len(older)} older "
-                          f"(topic-indexed) cross-session entries: "
-                          + "; ".join(s.get("session_id","?") for s in recent[:3]),
-                          file=_sys.stderr, flush=True)
-            except Exception:
-                pass
-
-        import sys as _sys
-        user_message = args[0] if args else kwargs.get("user_message", "")
-        entry_id = None
-        try:
-            print(f"[stm] append: session={session_id} prompt={user_message[:80]}",
-                  file=_sys.stderr, flush=True)
-            res = subprocess.run(
-                [sys.executable, str(Path.home() / ".hermes" / "scripts" / "stm.py"),
-                 "append", session_id, user_message[:500]],
-                capture_output=True, text=True, timeout=5,
-                env={**os.environ, "STM_DEBUG": "1"}
-            )
-            if res.returncode == 0 and res.stdout.startswith("id:"):
-                entry_id = int(res.stdout.strip().split(":")[1])
-                print(f"[stm] append: entry_id={entry_id}", file=_sys.stderr, flush=True)
-        except Exception as e:
-            print(f"[stm] append error: {e}", file=_sys.stderr, flush=True)
-            entry_id = None
-
-        result = fn(self, *args, **kwargs)
-
-        if entry_id is not None:
-            tool_names = []
-            for msg in result.get("messages", []):
-                if msg.get("role") == "assistant" and msg.get("tool_calls"):
-                    for tc in msg["tool_calls"]:
-                        name = tc.get("function", {}).get("name", "")
-                        if name:
-                            tool_names.append(name)
-            actions_str = ", ".join(tool_names) if tool_names else "no tools"
-            result_str  = (result.get("final_response") or "")[:300].replace(chr(92)+"n", " ")
-            completed   = result.get("completed", False)
-            interrupted = result.get("interrupted", False)
-            status_str  = "success" if completed and not interrupted \
-                          else ("failed" if interrupted else "partial")
-            try:
-                print(f"[stm] update: id={entry_id} [{status_str}] "
-                      f"actions={actions_str[:60]}", file=_sys.stderr, flush=True)
-                subprocess.run(
-                    [sys.executable, str(Path.home() / ".hermes" / "scripts" / "stm.py"),
-                     "update", str(entry_id),
-                     actions_str[:200], result_str[:300], status_str],
-                    capture_output=True, text=True, timeout=5,
-                    env={**os.environ, "STM_DEBUG": "1"}
-                )
-            except Exception as e:
-                print(f"[stm] update error: {e}", file=_sys.stderr, flush=True)
-        return result
-    return wrapper
-```
-
-### Step 3 — Apply `@stm_track` to `run_conversation` (line ~8623)
-
-Find:
-```python
-    def run_conversation(self, user_message: str, system_message: str = None,
-```
-
-Add `@stm_track` directly above it:
-```python
-    @stm_track
-    def run_conversation(self, user_message: str, system_message: str = None,
-```
-
-## Full `stm_track` Decorator (two-tier version)
-
-```python
-# ── STM TRACKING DECORATOR ──────────────────────────────────────────────────────
-def stm_track(fn):
-    @functools.wraps(fn)
-    def wrapper(self, *args, **kwargs):
-        import sys as _sys, os
-        _sess_id = self.session_id or "cli"
-
-        # ── NEW SESSION: two-tier cross-session context injection ─────────────
-        _hist = kwargs.get("conversation_history")
-        if _hist is None or len(_hist) == 0:
-            try:
-                res = subprocess.run(
-                    [sys.executable,
-                     str(Path.home() / ".hermes" / "scripts" / "stm.py"),
-                     "summaries"],
-                    capture_output=True, text=True, timeout=10,
-                    env={**os.environ, "STM_DEBUG": "1"}
-                )
-                if res.returncode == 0:
-                    data = json.loads(res.stdout)
-                    recent = data.get("recent", [])
-                    older  = data.get("older",  [])
-
-                    ctx_lines = ["[Session Context - recent cross-session activity]"]
-
-                    # Tier 1: recent entries — injected as-is
-                    for s in recent:
-                        _a  = s.get("actions") or "-"
-                        _r  = s.get("result")  or "-"
-                        _st = s.get("status")   or "-"
-                        _sid = s.get("session_id", "?")
-                        ctx_lines.append(
-                            "  " + _sid + " [" + _st + "] "
-                            + _a + " -> " + _r[:120]
-                        )
-
-                    # Tier 2: older entries — topic-indexed (TF-IDF, no LLM)
-                    if older:
-                        try:
-                            idx_res = subprocess.run(
-                                [sys.executable,
-                                 str(Path.home() / ".hermes" / "scripts" / "build_topic_index.py")],
-                                capture_output=True, text=True, timeout=10,
-                                env={**os.environ, "STM_DEBUG": "1"}
-                            )
-                            if idx_res.returncode == 0 and idx_res.stdout.strip():
-                                ctx_lines.append("")
-                                ctx_lines.append("  [Earlier sessions — topic index]")
-                                ctx_lines.append("  " + idx_res.stdout.strip())
-                        except Exception:
-                            pass  # topic indexing optional — fail silent
-
-                    inject_msg = "\n".join(ctx_lines)
-                    _orig_sys = kwargs.get("system_message") or ""
-                    kwargs = dict(kwargs)
-                    kwargs["system_message"] = (
-                        (_orig_sys + "\n\n" + inject_msg) if _orig_sys else inject_msg
-                    )
-                    print(f"[stm] Injected {len(recent)} recent + {len(older)} older "
-                          f"(topic-indexed) cross-session entries: "
-                          + "; ".join(s.get("session_id","?") for s in recent[:3]),
-                          file=_sys.stderr, flush=True)
-            except Exception: pass
-
-        # ── APPEND ───────────────────────────────────────────────────────────────
-        _user_msg = args[0] if args else kwargs.get("user_message", "")
-        _entry_id = None
-        try:
-            print(f"[stm] append: {_sess_id} prompt={_user_msg[:80]}",
-                  file=_sys.stderr, flush=True)
-            res = subprocess.run(
-                [sys.executable,
-                 str(Path.home() / ".hermes" / "scripts" / "stm.py"),
-                 "append", _sess_id, _user_msg[:500]],
-                capture_output=True, text=True, timeout=5,
-                env={**os.environ, "STM_DEBUG": "1"}
-            )
-            if res.returncode == 0 and res.stdout.startswith("id:"):
-                _entry_id = int(res.stdout.strip().split(":")[1])
-        except Exception as e:
-            print(f"[stm] append error: {e}", file=_sys.stderr, flush=True)
-
-        result = fn(self, *args, **kwargs)
-
-        # ── UPDATE ───────────────────────────────────────────────────────────────
-        if _entry_id is not None:
-            _tool_names = []
-            for msg in result.get("messages", []):
-                if msg.get("role") == "assistant" and msg.get("tool_calls"):
-                    for tc in msg["tool_calls"]:
-                        _n = tc.get("function",{}).get("name","")
-                        if _n: _tool_names.append(_n)
-            _act = ", ".join(_tool_names) if _tool_names else "no tools"
-            _res = (result.get("final_response") or "")[:300].replace("\n", " ")
-            _st = "success" if result.get("completed") and not result.get("interrupted") \
-                  else ("failed" if result.get("interrupted") else "partial")
-            try:
-                subprocess.run(
-                    [sys.executable,
-                     str(Path.home() / ".hermes" / "scripts" / "stm.py"),
-                     "update", str(_entry_id),
-                     _act[:200], _res[:300], _st],
-                    capture_output=True, text=True, timeout=5,
-                    env={**os.environ, "STM_DEBUG": "1"}
-                )
-            except Exception: pass
-        return result
-    return wrapper
-```
+---
 
 ## Verification
 
-After patching:
 ```bash
-python3 -c "import run_agent; print('OK')"  # should import without error
-python3 ~/.hermes/scripts/stm.py append "test_session" "hello world"
-# → should return id:1
-python3 ~/.hermes/scripts/stm.py summaries 1
-# → should return JSON with the test entry
+# Quick check — is decorator present?
+python3 ~/.hermes/scripts/patch_stm_decorator.py --verify
+# → "VERIFY: OK" or "VERIFY: MISSING"
+
+# Manual patch
+python3 ~/.hermes/scripts/patch_stm_decorator.py --apply
+
+# Check stm.db is being written
+python3 ~/.hermes/scripts/stm.py count
+# Should increase after each CLI turn
+
+# Check topic index works
+python3 ~/.hermes/scripts/build_topic_index.py | head -10
+
+# Check stm is logging
+# stderr output from the decorator goes to wherever Hermes stderr goes
+# Look for: "[stm] Injected N recent + M older (topic-indexed) entries:"
 ```
+
+---
 
 ## Rollback
 
-If something goes wrong:
 ```bash
 cd ~/.hermes/hermes-agent && git checkout run_agent.py
-# Then re-run the patch
+python3 ~/.hermes/scripts/patch_stm_decorator.py --apply  # re-apply if needed
 ```
+
+---
+
+## Key Files
+
+| File | Location |
+|------|----------|
+| `run_agent.py` | `~/.hermes/hermes-agent/run_agent.py` |
+| `patch_stm_decorator.py` | `~/.hermes/scripts/patch_stm_decorator.py` |
+| `stm.py` | `~/.hermes/scripts/stm.py` → `skills/short-term-mem-sqlite/scripts/stm.py` |
+| `build_topic_index.py` | `~/.hermes/scripts/build_topic_index.py` → same |
+| `stm.db` | `~/.hermes/sessions/stm.db` |
+| Cron job | Hermes cron scheduler (job_id: e0dde69b683a) |
